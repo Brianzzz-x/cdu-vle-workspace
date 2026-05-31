@@ -1,0 +1,60 @@
+@import url('https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;0,6..72,700;1,6..72,400&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Newsreader", Georgia, serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* Claude Brand Humanist Color Palette */
+  --color-claude-oat: #fbfaf7;       /* Soft cozy warm base background */
+  --color-claude-cream: #f9f6f0;     /* Editorial panel cream card */
+  --color-claude-sand: #f0ebd4;      /* High contrast highlight tone */
+  --color-claude-border: #e8e3d9;    /* Fine line border */
+  --color-claude-coal: #191919;      /* Sophisticated main text and titles */
+  --color-claude-clay: #cc5a37;      /* Classic Claude warm terracotta coral accent */
+  --color-claude-clay-light: #f7ece8; /* Soft terracotta background tint */
+  --color-claude-muted: #6b665f;     /* Balanced warm charcoal caption gray */
+
+  --color-vle-paper: #fbfaf4;
+  --color-vle-panel: #eef0e8;
+  --color-vle-line: #d9ddd2;
+  --color-vle-ink: #20231d;
+  --color-vle-muted: #687063;
+  --color-vle-green: #006b3f;
+}
+
+/* Custom Webkit scrollbar matching paper texture */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-track {
+  background: #fbfaf7;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #e8e3d9;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #d8d3c9;
+}
+
+/* Custom warm amber text-selection */
+::selection {
+  background-color: #f0ebd4;
+  color: #191919;
+}
+
+/* Subtle fade animations */
+@keyframes pulseGlow {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 0.5; }
+}
+
+.animate-pulse-glow {
+  animation: pulseGlow 2s ease-in-out infinite;
+}

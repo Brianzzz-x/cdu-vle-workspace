@@ -1,0 +1,6 @@
+{
+  "name": "VLE Academic Workspace",
+  "description": "An interactive document reader and smart workspace designed to simplify, organize, and categorize learning materials from vle.zycdu.net with built-in PDF reader, bookmarks, progress dashboards, and AI summary capabilities.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

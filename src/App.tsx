@@ -37,12 +37,46 @@ const tabItems: Array<{ id: AppTab; label: string; icon: React.ElementType }> = 
   { id: 'links', label: 'Quick Links', icon: LinkIcon }
 ];
 
+const FEEDBACK_CACHE_KEY = 'vle-workspace.feedback-cache.v1';
+
+type FeedbackCachePayload = {
+  feedback: FeedbackItem[];
+  count: number;
+  pages: number;
+  syncedAt: string;
+};
+
+function readFeedbackCache(): FeedbackCachePayload | null {
+  try {
+    const raw = window.localStorage.getItem(FEEDBACK_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as FeedbackCachePayload;
+    return Array.isArray(parsed.feedback) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeFeedbackCache(cache: FeedbackCachePayload) {
+  window.localStorage.setItem(FEEDBACK_CACHE_KEY, JSON.stringify(cache));
+}
+
+function formatCacheTime(value?: string) {
+  if (!value) return 'unknown time';
+  return new Date(value).toLocaleString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [courses] = useState(INITIAL_COURSES);
   const [posts, setPosts] = useState(INITIAL_POSTS);
-  const [feedback, setFeedback] = useState<FeedbackItem[]>(INITIAL_FEEDBACK);
+  const [feedback, setFeedback] = useState<FeedbackItem[]>(() => readFeedbackCache()?.feedback || INITIAL_FEEDBACK);
   const [activeAttachment, setActiveAttachment] = useState<Attachment | null>(
     INITIAL_POSTS.flatMap(post => post.attachments).find(attachment => attachment.status === 'reading') || null
   );
@@ -55,7 +89,12 @@ export default function App() {
   const [password, setPassword] = useState('');
   const [loginBusy, setLoginBusy] = useState(false);
   const [feedbackBusy, setFeedbackBusy] = useState(false);
-  const [feedbackMessage, setFeedbackMessage] = useState('Demo feedback loaded.');
+  const [feedbackMessage, setFeedbackMessage] = useState(() => {
+    const cache = readFeedbackCache();
+    return cache
+      ? `Loaded ${cache.count} cached feedback records from ${formatCacheTime(cache.syncedAt)}.`
+      : 'Demo feedback loaded.';
+  });
 
   const allAttachments = useMemo(() => posts.flatMap(post => post.attachments), [posts]);
 
@@ -121,7 +160,7 @@ export default function App() {
       });
       setPassword('');
       setLoginOpen(false);
-      await syncFeedback();
+      await loadFeedbackCacheFromServer();
     } catch (error: any) {
       setLoginState({
         connected: false,
@@ -133,21 +172,54 @@ export default function App() {
     }
   };
 
-  const syncFeedback = async () => {
-    setFeedbackBusy(true);
-    setFeedbackMessage('Syncing all feedback pages from VLE...');
+  const applyFeedbackPayload = (payload: any) => {
+    const cache: FeedbackCachePayload = {
+      feedback: payload.feedback || [],
+      count: payload.count || 0,
+      pages: payload.pages || 0,
+      syncedAt: payload.syncedAt || new Date().toISOString()
+    };
+    setFeedback(cache.feedback);
+    writeFeedbackCache(cache);
+    return cache;
+  };
+
+  const loadFeedbackCacheFromServer = async () => {
     try {
       const response = await fetch('/api/vle/feedback');
       const payload = await response.json();
       if (!response.ok) {
+        throw new Error(payload.error || 'Unable to load cached VLE feedback.');
+      }
+      const cache = applyFeedbackPayload(payload);
+      const source = payload.cached ? 'server cache' : 'VLE';
+      setFeedbackMessage(`Loaded ${cache.count} feedback records from ${source}. Last synced ${formatCacheTime(cache.syncedAt)}.`);
+    } catch (error: any) {
+      const cache = readFeedbackCache();
+      if (cache) {
+        setFeedback(cache.feedback);
+        setFeedbackMessage(`Using local cache from ${formatCacheTime(cache.syncedAt)}. Click sync when VLE has updates.`);
+        return;
+      }
+      setFeedbackMessage(error.message || 'Unable to load VLE feedback cache.');
+    }
+  };
+
+  const syncFeedback = async (force = true) => {
+    setFeedbackBusy(true);
+    setFeedbackMessage(force ? 'Refreshing all feedback pages from VLE...' : 'Loading cached feedback...');
+    try {
+      const response = await fetch(`/api/vle/feedback${force ? '?force=1' : ''}`);
+      const payload = await response.json();
+      if (!response.ok) {
         throw new Error(payload.error || 'Unable to sync VLE feedback.');
       }
-      setFeedback(payload.feedback || []);
-      setFeedbackMessage(`Synced ${payload.count || 0} feedback records across ${payload.pages || 0} VLE page${payload.pages === 1 ? '' : 's'}.`);
+      const cache = applyFeedbackPayload(payload);
+      setFeedbackMessage(`${payload.cached ? 'Loaded cached' : 'Synced'} ${cache.count} feedback records across ${cache.pages} VLE page${cache.pages === 1 ? '' : 's'}. Last synced ${formatCacheTime(cache.syncedAt)}.`);
       setLoginState(current => ({
         ...current,
         connected: true,
-        message: `Feedback synced: ${payload.count || 0} records.`
+        message: `${payload.cached ? 'Feedback loaded from cache' : 'Feedback synced'}: ${cache.count} records.`
       }));
     } catch (error: any) {
       setFeedbackMessage(error.message || 'Unable to sync VLE feedback.');
@@ -261,7 +333,7 @@ export default function App() {
 
           <div className="flex items-center gap-2">
             <button
-              onClick={syncFeedback}
+              onClick={() => syncFeedback(true)}
               disabled={feedbackBusy}
               className="hidden sm:flex px-3 py-2 rounded-lg border border-vle-line bg-white text-xs font-semibold items-center gap-2 disabled:opacity-60"
             >
@@ -398,7 +470,7 @@ function FeedbackWorkspace({
             <p className="text-sm text-vle-muted mt-1">{message}</p>
           </div>
           <button
-            onClick={onSync}
+            onClick={() => onSync()}
             disabled={busy}
             className="px-3 py-2 rounded-lg bg-vle-green text-white text-xs font-bold flex items-center gap-2 disabled:opacity-60"
           >

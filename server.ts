@@ -10,7 +10,7 @@ import { parseFeedbackDetail, parseFeedbackList } from './src/lib/vleFeedbackPar
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const DEFAULT_PORT = Number(process.env.PORT || 3000);
 
 app.use(express.json());
 
@@ -18,9 +18,18 @@ type VleSession = {
   username: string;
   createdAt: number;
   cookies: string[];
+  feedbackCache?: VleFeedbackCache;
+};
+
+type VleFeedbackCache = {
+  feedback: FeedbackItem[];
+  count: number;
+  pages: number;
+  syncedAt: string;
 };
 
 const vleSessions = new Map<string, VleSession>();
+const vleFeedbackCachesByUsername = new Map<string, VleFeedbackCache>();
 
 const VLE_BASE_URL = process.env.VLE_BASE_URL || 'https://vle.zycdu.net';
 
@@ -174,10 +183,12 @@ app.post('/api/vle/login', async (req, res) => {
     }
 
     const sessionId = makeSessionId();
+    const feedbackCache = vleFeedbackCachesByUsername.get(username);
     vleSessions.set(sessionId, {
       username,
       createdAt: Date.now(),
-      cookies: responseCookies
+      cookies: responseCookies,
+      feedbackCache
     });
 
     res.cookie('vle_workspace_session', sessionId, {
@@ -223,6 +234,15 @@ app.get('/api/vle/feedback', async (req, res) => {
       return;
     }
 
+    const forceRefresh = req.query.force === '1' || req.query.force === 'true';
+    if (session.feedbackCache && !forceRefresh) {
+      res.json({
+        ...session.feedbackCache,
+        cached: true
+      });
+      return;
+    }
+
     const feedbackPages = new Set<string>([absoluteVleUrl('/feedback')]);
     const visitedPages = new Set<string>();
     const feedbackByUrl = new Map<string, FeedbackItem>();
@@ -260,10 +280,19 @@ app.get('/api/vle/feedback', async (req, res) => {
       }
     }
 
-    res.json({
+    const feedbackCache: VleFeedbackCache = {
       feedback: hydratedFeedback,
       count: hydratedFeedback.length,
-      pages: visitedPages.size
+      pages: visitedPages.size,
+      syncedAt: new Date().toISOString()
+    };
+
+    session.feedbackCache = feedbackCache;
+    vleFeedbackCachesByUsername.set(session.username, feedbackCache);
+
+    res.json({
+      ...feedbackCache,
+      cached: false
     });
   } catch (error: any) {
     console.error('VLE feedback sync error:', error);
@@ -398,7 +427,10 @@ app.post('/api/gemini/chat', async (req, res) => {
 // ----------------------------------------------------
 // BOOTSTRAP EXPRESS SERVER + VITE MIDDLEWARE
 // ----------------------------------------------------
-async function run() {
+export async function startServer(options: { port?: number; host?: string } = {}) {
+  const port = options.port ?? DEFAULT_PORT;
+  const host = options.host ?? '0.0.0.0';
+
   // Vite integration
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
@@ -416,11 +448,13 @@ async function run() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`VLE Academic Workspace server running on http://0.0.0.0:${PORT}`);
+  return app.listen(port, host, () => {
+    console.log(`VLE Academic Workspace server running on http://${host}:${port}`);
   });
 }
 
-run().catch((err) => {
-  console.error('Failure starting fullstack server:', err);
-});
+if (process.env.VLE_SERVER_STANDALONE !== 'false') {
+  startServer().catch((err) => {
+    console.error('Failure starting fullstack server:', err);
+  });
+}

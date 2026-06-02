@@ -451,11 +451,20 @@ function FeedbackWorkspace({
 }) {
   const [selectedId, setSelectedId] = useState(feedback[0]?.id);
   const selected = feedback.find(item => item.id === selectedId) || feedback[0];
-  const grouped = feedback.reduce<Record<string, typeof feedback>>((acc, item) => {
-    acc[item.semester] = acc[item.semester] || [];
-    acc[item.semester].push(item);
+  const grouped = feedback.reduce<Record<string, Record<string, typeof feedback>>>((acc, item) => {
+    acc[item.semester] = acc[item.semester] || {};
+    acc[item.semester][item.module] = acc[item.semester][item.module] || [];
+    acc[item.semester][item.module].push(item);
     return acc;
   }, {});
+
+  const averageScore = (items: FeedbackItem[]) => {
+    const scores = items
+      .map(item => item.totalScore)
+      .filter((score): score is number => typeof score === 'number');
+    if (scores.length === 0) return null;
+    return Math.round(scores.reduce((total, score) => total + score, 0) / scores.length);
+  };
 
   return (
     <section className="grid grid-cols-1 xl:grid-cols-12 gap-5">
@@ -478,24 +487,43 @@ function FeedbackWorkspace({
             {busy ? 'Syncing' : 'Sync all'}
           </button>
         </div>
-        {Object.entries(grouped).map(([semester, items]) => (
+        {Object.entries(grouped).map(([semester, modules]) => (
           <div key={semester} className="bg-white rounded-xl border border-vle-line overflow-hidden">
             <div className="px-4 py-3 bg-vle-panel border-b border-vle-line text-xs font-bold uppercase tracking-wider text-vle-muted">{semester}</div>
-            {items.map(item => (
-              <button
-                key={item.id}
-                onClick={() => setSelectedId(item.id)}
-                className={`w-full text-left p-4 border-b last:border-b-0 border-vle-line ${selected?.id === item.id ? 'bg-emerald-50' : 'hover:bg-vle-panel/60'}`}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-bold">{item.assessment}</p>
-                    <p className="text-xs text-vle-muted mt-1">{item.module} · Level {item.level}</p>
+            {Object.entries(modules).map(([moduleName, items]) => {
+              const moduleAverage = averageScore(items);
+              return (
+                <div key={moduleName} className="border-b last:border-b-0 border-vle-line">
+                  <div className="px-4 py-3 bg-white">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-bold">{moduleName}</p>
+                        <p className="text-xs text-vle-muted mt-1">{items.length} assessment{items.length === 1 ? '' : 's'} · Level {items[0]?.level}</p>
+                      </div>
+                      {moduleAverage !== null && (
+                        <span className="rounded-md bg-vle-panel border border-vle-line px-2 py-1 text-xs font-mono font-bold text-vle-green">
+                          avg {moduleAverage}%
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  {typeof item.totalScore === 'number' && <span className="text-sm font-mono font-bold text-vle-green">{item.totalScore}%</span>}
+                  <div className="bg-vle-panel/45">
+                    {items.map(item => (
+                      <button
+                        key={item.id}
+                        onClick={() => setSelectedId(item.id)}
+                        className={`w-full text-left px-4 py-3 border-t border-vle-line ${selected?.id === item.id ? 'bg-emerald-50' : 'hover:bg-white/70'}`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <p className="text-sm font-semibold">{item.assessment}</p>
+                          {typeof item.totalScore === 'number' && <span className="text-sm font-mono font-bold text-vle-green">{item.totalScore}%</span>}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </button>
-            ))}
+              );
+            })}
           </div>
         ))}
       </div>

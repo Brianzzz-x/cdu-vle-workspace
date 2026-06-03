@@ -14,7 +14,7 @@ import {
   ShieldCheck,
   X
 } from 'lucide-react';
-import { Attachment, FeedbackItem, ReaderStatus, VleLoginState } from './types';
+import { Attachment, Course, FeedbackItem, ReaderStatus, VleLoginState, VlePost } from './types';
 import {
   INITIAL_COURSES,
   INITIAL_FEEDBACK,
@@ -38,10 +38,20 @@ const tabItems: Array<{ id: AppTab; label: string; icon: React.ElementType }> = 
 ];
 
 const FEEDBACK_CACHE_KEY = 'vle-workspace.feedback-cache.v1';
+const MATERIALS_CACHE_KEY = 'vle-workspace.materials-cache.v1';
 
 type FeedbackCachePayload = {
   feedback: FeedbackItem[];
   count: number;
+  pages: number;
+  syncedAt: string;
+};
+
+type MaterialsCachePayload = {
+  courses: Course[];
+  posts: VlePost[];
+  count: number;
+  moduleCount: number;
   pages: number;
   syncedAt: string;
 };
@@ -57,8 +67,23 @@ function readFeedbackCache(): FeedbackCachePayload | null {
   }
 }
 
+function readMaterialsCache(): MaterialsCachePayload | null {
+  try {
+    const raw = window.localStorage.getItem(MATERIALS_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as MaterialsCachePayload;
+    return Array.isArray(parsed.courses) && Array.isArray(parsed.posts) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 function writeFeedbackCache(cache: FeedbackCachePayload) {
   window.localStorage.setItem(FEEDBACK_CACHE_KEY, JSON.stringify(cache));
+}
+
+function writeMaterialsCache(cache: MaterialsCachePayload) {
+  window.localStorage.setItem(MATERIALS_CACHE_KEY, JSON.stringify(cache));
 }
 
 function formatCacheTime(value?: string) {
@@ -74,8 +99,8 @@ function formatCacheTime(value?: string) {
 export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [courses] = useState(INITIAL_COURSES);
-  const [posts, setPosts] = useState(INITIAL_POSTS);
+  const [courses, setCourses] = useState<Course[]>(() => readMaterialsCache()?.courses || INITIAL_COURSES);
+  const [posts, setPosts] = useState<VlePost[]>(() => readMaterialsCache()?.posts || INITIAL_POSTS);
   const [feedback, setFeedback] = useState<FeedbackItem[]>(() => readFeedbackCache()?.feedback || INITIAL_FEEDBACK);
   const [activeAttachment, setActiveAttachment] = useState<Attachment | null>(
     INITIAL_POSTS.flatMap(post => post.attachments).find(attachment => attachment.status === 'reading') || null
@@ -89,6 +114,13 @@ export default function App() {
   const [password, setPassword] = useState('');
   const [loginBusy, setLoginBusy] = useState(false);
   const [feedbackBusy, setFeedbackBusy] = useState(false);
+  const [materialsBusy, setMaterialsBusy] = useState(false);
+  const [materialsMessage, setMaterialsMessage] = useState(() => {
+    const cache = readMaterialsCache();
+    return cache
+      ? `Loaded ${cache.count} cached module posts from ${formatCacheTime(cache.syncedAt)}.`
+      : 'Demo module materials loaded.';
+  });
   const [feedbackMessage, setFeedbackMessage] = useState(() => {
     const cache = readFeedbackCache();
     return cache
@@ -160,6 +192,7 @@ export default function App() {
       });
       setPassword('');
       setLoginOpen(false);
+      await loadMaterialsCacheFromServer();
       await loadFeedbackCacheFromServer();
     } catch (error: any) {
       setLoginState({
@@ -182,6 +215,72 @@ export default function App() {
     setFeedback(cache.feedback);
     writeFeedbackCache(cache);
     return cache;
+  };
+
+  const applyMaterialsPayload = (payload: any) => {
+    const cache: MaterialsCachePayload = {
+      courses: payload.courses || [],
+      posts: payload.posts || [],
+      count: payload.count || 0,
+      moduleCount: payload.moduleCount || 0,
+      pages: payload.pages || 0,
+      syncedAt: payload.syncedAt || new Date().toISOString()
+    };
+    if (cache.courses.length > 0) {
+      setCourses(cache.courses);
+    }
+    setPosts(cache.posts);
+    writeMaterialsCache(cache);
+    setActiveAttachment(current => {
+      if (!current) return null;
+      return cache.posts.flatMap(post => post.attachments).find(attachment => attachment.id === current.id) || null;
+    });
+    return cache;
+  };
+
+  const loadMaterialsCacheFromServer = async () => {
+    try {
+      const response = await fetch('/api/vle/modules');
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || 'Unable to load cached VLE modules.');
+      }
+      const cache = applyMaterialsPayload(payload);
+      const source = payload.cached ? 'server cache' : 'VLE';
+      setMaterialsMessage(`Loaded ${cache.count} module posts from ${source}. Last synced ${formatCacheTime(cache.syncedAt)}.`);
+    } catch (error: any) {
+      const cache = readMaterialsCache();
+      if (cache) {
+        setCourses(cache.courses);
+        setPosts(cache.posts);
+        setMaterialsMessage(`Using local module cache from ${formatCacheTime(cache.syncedAt)}. Click sync when VLE has updates.`);
+        return;
+      }
+      setMaterialsMessage(error.message || 'Unable to load VLE module cache.');
+    }
+  };
+
+  const syncMaterials = async (force = true) => {
+    setMaterialsBusy(true);
+    setMaterialsMessage(force ? 'Refreshing module pages from VLE...' : 'Loading cached module materials...');
+    try {
+      const response = await fetch(`/api/vle/modules${force ? '?force=1' : ''}`);
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || 'Unable to sync VLE modules.');
+      }
+      const cache = applyMaterialsPayload(payload);
+      setMaterialsMessage(`${payload.cached ? 'Loaded cached' : 'Synced'} ${cache.count} posts from ${cache.moduleCount} modules across ${cache.pages} VLE page${cache.pages === 1 ? '' : 's'}. Last synced ${formatCacheTime(cache.syncedAt)}.`);
+      setLoginState(current => ({
+        ...current,
+        connected: true,
+        message: `${payload.cached ? 'Modules loaded from cache' : 'Modules synced'}: ${cache.count} posts.`
+      }));
+    } catch (error: any) {
+      setMaterialsMessage(error.message || 'Unable to sync VLE modules.');
+    } finally {
+      setMaterialsBusy(false);
+    }
   };
 
   const loadFeedbackCacheFromServer = async () => {
@@ -226,6 +325,11 @@ export default function App() {
     } finally {
       setFeedbackBusy(false);
     }
+  };
+
+  const syncSnapshot = async () => {
+    await syncMaterials(true);
+    await syncFeedback(true);
   };
 
   const currentDate = new Date().toLocaleDateString('en-GB', {
@@ -306,6 +410,7 @@ export default function App() {
               <ShieldCheck size={15} className="text-vle-green" />
             </div>
             <p className="text-[11px] text-vle-muted mt-1 leading-relaxed">{loginState.message}</p>
+            <p className="text-[11px] text-vle-muted mt-2 leading-relaxed">{materialsMessage}</p>
           </div>
           <button
             onClick={() => setLoginOpen(true)}
@@ -333,12 +438,12 @@ export default function App() {
 
           <div className="flex items-center gap-2">
             <button
-              onClick={() => syncFeedback(true)}
-              disabled={feedbackBusy}
+              onClick={syncSnapshot}
+              disabled={feedbackBusy || materialsBusy}
               className="hidden sm:flex px-3 py-2 rounded-lg border border-vle-line bg-white text-xs font-semibold items-center gap-2 disabled:opacity-60"
             >
               <RefreshCw size={13} />
-              {feedbackBusy ? 'Syncing...' : 'Sync feedback'}
+              {feedbackBusy || materialsBusy ? 'Syncing...' : 'Sync VLE'}
             </button>
             <a
               href="https://vle.zycdu.net"
@@ -370,8 +475,11 @@ export default function App() {
             <MaterialsFeed
               courses={courses}
               posts={posts}
+              busy={materialsBusy}
+              message={materialsMessage}
               onOpenAttachment={handleOpenAttachment}
               onToggleBookmark={handleToggleBookmark}
+              onSync={() => syncMaterials(true)}
             />
           )}
 

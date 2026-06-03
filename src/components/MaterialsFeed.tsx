@@ -11,6 +11,7 @@ import {
   Layers3,
   Megaphone,
   PlaySquare,
+  RefreshCw,
   Search,
   Table2
 } from 'lucide-react';
@@ -19,15 +20,21 @@ import { Attachment, AttachmentType, Course, VleContentType, VlePost } from '../
 interface MaterialsFeedProps {
   courses: Course[];
   posts: VlePost[];
+  busy: boolean;
+  message: string;
   onOpenAttachment: (attachment: Attachment) => void;
   onToggleBookmark: (attachmentId: string) => void;
+  onSync: () => void;
 }
 
 export default function MaterialsFeed({
   courses,
   posts,
+  busy,
+  message,
   onOpenAttachment,
-  onToggleBookmark
+  onToggleBookmark,
+  onSync
 }: MaterialsFeedProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCourseId, setSelectedCourseId] = useState<string | null>(null);
@@ -100,6 +107,21 @@ export default function MaterialsFeed({
               className="w-full rounded-lg border border-vle-line bg-white pl-9 pr-3 py-2 text-sm"
             />
           </div>
+        </div>
+
+        <div className="bg-white rounded-xl border border-vle-line p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wider text-vle-muted">Module sync</p>
+            <p className="text-sm text-vle-muted mt-1">{message}</p>
+          </div>
+          <button
+            onClick={onSync}
+            disabled={busy}
+            className="px-3 py-2 rounded-lg bg-vle-green text-white text-xs font-bold flex items-center justify-center gap-2 disabled:opacity-60"
+          >
+            <RefreshCw size={13} className={busy ? 'animate-spin' : ''} />
+            {busy ? 'Syncing' : 'Sync modules'}
+          </button>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">

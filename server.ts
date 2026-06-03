@@ -3,8 +3,9 @@ import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
-import type { FeedbackItem } from './src/types';
+import type { Course, FeedbackItem, VlePost } from './src/types';
 import { parseFeedbackDetail, parseFeedbackList } from './src/lib/vleFeedbackParser';
+import { parseCurrentModules, parseModulePage } from './src/lib/vleModulesParser';
 
 // Load environmental variables
 dotenv.config();
@@ -19,6 +20,7 @@ type VleSession = {
   createdAt: number;
   cookies: string[];
   feedbackCache?: VleFeedbackCache;
+  materialsCache?: VleMaterialsCache;
 };
 
 type VleFeedbackCache = {
@@ -28,8 +30,18 @@ type VleFeedbackCache = {
   syncedAt: string;
 };
 
+type VleMaterialsCache = {
+  courses: Course[];
+  posts: VlePost[];
+  count: number;
+  moduleCount: number;
+  pages: number;
+  syncedAt: string;
+};
+
 const vleSessions = new Map<string, VleSession>();
 const vleFeedbackCachesByUsername = new Map<string, VleFeedbackCache>();
+const vleMaterialsCachesByUsername = new Map<string, VleMaterialsCache>();
 
 const VLE_BASE_URL = process.env.VLE_BASE_URL || 'https://vle.zycdu.net';
 
@@ -184,11 +196,13 @@ app.post('/api/vle/login', async (req, res) => {
 
     const sessionId = makeSessionId();
     const feedbackCache = vleFeedbackCachesByUsername.get(username);
+    const materialsCache = vleMaterialsCachesByUsername.get(username);
     vleSessions.set(sessionId, {
       username,
       createdAt: Date.now(),
       cookies: responseCookies,
-      feedbackCache
+      feedbackCache,
+      materialsCache
     });
 
     res.cookie('vle_workspace_session', sessionId, {
@@ -220,10 +234,77 @@ app.get('/api/vle/status', (req, res) => {
 });
 
 app.get('/api/vle/modules', async (req, res) => {
-  res.status(501).json({
-    error: 'Module scraping is not implemented yet.',
-    next: 'Use the server-side session cookie to fetch /user/{id}/modules and normalize rows into Course objects.'
-  });
+  try {
+    const { session } = getVleSession(req);
+    if (!session) {
+      res.status(401).json({ error: 'Connect VLE login before syncing modules.' });
+      return;
+    }
+
+    const forceRefresh = req.query.force === '1' || req.query.force === 'true';
+    if (session.materialsCache && !forceRefresh) {
+      res.json({
+        ...session.materialsCache,
+        cached: true
+      });
+      return;
+    }
+
+    const home = await fetchVleTextForSession(session, '/node');
+    if (home.status >= 400 || /name="pass"|\/user\/login|Log in/i.test(home.html)) {
+      res.status(401).json({ error: 'VLE session expired. Please reconnect VLE login.' });
+      return;
+    }
+
+    const courses = parseCurrentModules(home.html, VLE_BASE_URL);
+    const postsByUrl = new Map<string, VlePost>();
+    let pages = 0;
+    const maxPagesPerModule = 6;
+
+    for (const course of courses) {
+      const pageQueue = new Set<string>([course.url]);
+      const visited = new Set<string>();
+
+      while (pageQueue.size > visited.size && visited.size < maxPagesPerModule) {
+        const nextUrl = [...pageQueue].find(url => !visited.has(url));
+        if (!nextUrl) break;
+        visited.add(nextUrl);
+        pages += 1;
+
+        const { html, url, status } = await fetchVleTextForSession(session, nextUrl);
+        if (status >= 400 || /name="pass"|\/user\/login|Log in/i.test(html)) continue;
+
+        const parsed = parseModulePage(html, course.id, VLE_BASE_URL);
+        parsed.posts.forEach(post => postsByUrl.set(post.url, post));
+        parsed.pageUrls
+          .filter(pageUrl => pageUrl.startsWith(course.url))
+          .forEach(pageUrl => pageQueue.add(pageUrl));
+      }
+    }
+
+    const posts = [...postsByUrl.values()].sort((left, right) => right.submittedAt.localeCompare(left.submittedAt));
+    const materialsCache: VleMaterialsCache = {
+      courses,
+      posts,
+      count: posts.length,
+      moduleCount: courses.length,
+      pages,
+      syncedAt: new Date().toISOString()
+    };
+
+    session.materialsCache = materialsCache;
+    vleMaterialsCachesByUsername.set(session.username, materialsCache);
+
+    res.json({
+      ...materialsCache,
+      cached: false
+    });
+  } catch (error: any) {
+    console.error('VLE modules sync error:', error);
+    res.status(502).json({
+      error: error.message || 'Unable to sync VLE modules.'
+    });
+  }
 });
 
 app.get('/api/vle/feedback', async (req, res) => {
